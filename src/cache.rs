@@ -12,7 +12,7 @@ impl SmMsCacheData {
     pub fn get_or_create() -> Option<SmMsCacheData> {
         let cache_path = std::path::Path::new(K_CACHE_PATH);
         if cache_path.exists() {
-            Some(Self::from().unwrap())
+            Self::from().ok()
         } else {
             std::fs::File::create(cache_path).unwrap();
             None

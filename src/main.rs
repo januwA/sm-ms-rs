@@ -18,7 +18,7 @@ const K_IMAGE_MAX_WIDTH: f32 = 200.0;
 fn main() -> Result<(), eframe::Error> {
     env_logger::init();
 
-    let mut cache_data = cache::SmMsCacheData::get_or_create();
+    let cache_data = cache::SmMsCacheData::get_or_create();
 
     let mut options = eframe::NativeOptions::default();
 
@@ -90,12 +90,16 @@ impl UploadHistoryDataUi {
 /* #endregion */
 
 struct MyApp {
-    window_open: bool,
+    logout_model_open: bool,
+
+    delete_image_model_open: bool,
+    delete_img_hash: Option<String>,
+
     /* #region login */
     username: String,
     password: String,
     login_loading: bool,
-    login_err: Option<String>,
+    login_err_o_s: Option<String>,
     token: String,
     token_o_p: Option<Promise<anyhow::Result<String>>>,
     /* #endregion */
@@ -122,7 +126,7 @@ impl MyApp {
         setup_custom_fonts(&cc.egui_ctx);
 
         let mut my = Self {
-            window_open: false,
+            logout_model_open: false,
             upload_history_o_p: None,
             profile_o_p: None,
             tab: vec![
@@ -133,7 +137,7 @@ impl MyApp {
             tab_index: 0,
             username: "ajanuw1995@gmail.com".to_string(),
             password: "".to_string(),
-            login_err: None,
+            login_err_o_s: None,
             login_loading: false,
             token: "".to_string(),
             token_o_p: None,
@@ -141,6 +145,8 @@ impl MyApp {
                 .enable_all()
                 .build()
                 .unwrap(),
+            delete_image_model_open: false,
+            delete_img_hash: None,
         };
 
         if let Some(cache_data) = cache_data {
@@ -240,6 +246,7 @@ impl MyApp {
                         .clicked()
                     {
                         self.token_o_p = None;
+                        self.login_err_o_s = None;
                         let (u, p) = (self.username.clone(), self.password.clone());
                         self.token_o_p.get_or_insert_with(|| {
                             let (sender, promise) = Promise::new();
@@ -256,8 +263,10 @@ impl MyApp {
                     }
                 });
 
-                if let Some(login_err) = &self.login_err {
-                    ui.label(RichText::new(login_err).size(20.0).color(Color32::RED));
+                if let Some(login_err) = self.login_err_o_s.as_mut() {
+                    egui::TextEdit::multiline(login_err)
+                        .text_color(Color32::RED)
+                        .show(ui);
                 }
             });
         });
@@ -320,6 +329,12 @@ impl MyApp {
                                                             });
                                                         });
                                                     }
+
+                                                    if ui.button("删除").clicked() {
+                                                        self.delete_img_hash =
+                                                            Some(data.data.hash.clone());
+                                                        self.delete_image_model_open = true;
+                                                    }
                                                 });
                                             });
                                         }
@@ -365,48 +380,53 @@ impl MyApp {
 
     // 显示账号信息
     fn widget_profile(&mut self, ui: &mut Ui, ctx: &egui::Context) {
-        let Some(profile_p) = &self.profile_o_p else {
-            return;
+        if let Some(profile_p) = &self.profile_o_p {
+            match profile_p.ready() {
+                Some(result) => match result {
+                    Ok(profile_data) => {
+                        ui.vertical(|ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new("username: ").size(20.0));
+                                ui.label(RichText::new(&profile_data.username).size(20.0));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new("email: ").size(20.0));
+                                ui.label(RichText::new(&profile_data.email).size(20.0));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new("role: ").size(20.0));
+                                ui.label(RichText::new(&profile_data.role).size(20.0));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new("disk_usage: ").size(20.0));
+                                ui.label(RichText::new(&profile_data.disk_usage).size(20.0));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new("disk_limit: ").size(20.0));
+                                ui.label(RichText::new(&profile_data.disk_limit).size(20.0));
+                            });
+                        });
+                    }
+                    Err(err) => {
+                        ui.label(
+                            RichText::new(&err.to_string())
+                                .size(20.0)
+                                .color(Color32::RED),
+                        );
+                    }
+                },
+                _ => {
+                    ui.spinner();
+                }
+            }
         };
 
-        match profile_p.ready() {
-            Some(result) => match result {
-                Ok(profile_data) => {
-                    ui.vertical(|ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new("username: ").size(20.0));
-                            ui.label(RichText::new(&profile_data.username).size(20.0));
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new("email: ").size(20.0));
-                            ui.label(RichText::new(&profile_data.email).size(20.0));
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new("role: ").size(20.0));
-                            ui.label(RichText::new(&profile_data.role).size(20.0));
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new("disk_usage: ").size(20.0));
-                            ui.label(RichText::new(&profile_data.disk_usage).size(20.0));
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new("disk_limit: ").size(20.0));
-                            ui.label(RichText::new(&profile_data.disk_limit).size(20.0));
-                        });
-                    });
-                }
-                Err(err) => {
-                    ui.label(
-                        RichText::new(&err.to_string())
-                            .size(20.0)
-                            .color(Color32::RED),
-                    );
-                }
-            },
-            _ => {
-                ui.spinner();
-            }
-        }
+        if ui
+            .button(RichText::new("退出登录").color(Color32::GREEN))
+            .clicked()
+        {
+            self.logout_model_open = true;
+        };
     }
 
     /// 登录后界面
@@ -435,11 +455,68 @@ impl MyApp {
 /* #region MyApp update */
 impl eframe::App for MyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if self.window_open {
+        if self.logout_model_open {
             egui::Window::new("Modal Window")
-                .open(&mut self.window_open)
+                .default_open(true)
+                .default_width(120f32)
+                .default_height(80f32)
                 .show(ctx, |ui| {
-                    ui.label("contents");
+                    ui.vertical(|ui| {
+                        ui.label("确定退出登陆吗?");
+
+                        ui.horizontal(|ui| {
+                            if ui
+                                .button(RichText::new("确定").color(Color32::BLUE))
+                                .clicked()
+                            {
+                                self.token.clear();
+                                self.token_o_p = None;
+                                cache::SmMsCacheData::save(cache::SmMsCacheData { token: None });
+                                self.logout_model_open = false;
+                            }
+
+                            if ui.button(RichText::new("取消")).clicked() {
+                                self.logout_model_open = false;
+                            }
+                        });
+                    });
+                });
+        }
+
+        if self.delete_image_model_open {
+            egui::Window::new("Modal Window")
+                .default_open(true)
+                .default_width(120f32)
+                .default_height(80f32)
+                .show(ctx, |ui| {
+                    ui.vertical(|ui| {
+                        ui.label("确定删除吗?");
+
+                        ui.horizontal(|ui| {
+                            if ui
+                                .button(RichText::new("确定").color(Color32::BLUE))
+                                .clicked()
+                            {
+                                self.delete_image_model_open = false;
+                                let mut upload_history_o_p = self.upload_history_o_p.as_mut();
+                                let token = self.token.clone();
+                                let hash = self.delete_img_hash.clone().unwrap();
+                                self.rt.spawn(async move {
+                                    let res = api::delete_image(token, hash).await;
+                                    if let Ok(r) = res {
+                                        if r {
+                                            upload_history_o_p = None;
+                                            self.get_upload_history_data(&ctx);
+                                        }
+                                    }
+                                });
+                            }
+
+                            if ui.button(RichText::new("取消")).clicked() {
+                                self.delete_image_model_open = false;
+                            }
+                        });
+                    });
                 });
         }
 
@@ -463,7 +540,7 @@ impl eframe::App for MyApp {
                     }
                     Err(err) => {
                         self.login_loading = false;
-                        self.login_err = Some(err.to_string());
+                        self.login_err_o_s = Some(err.to_string());
                         self.token_o_p = None;
                         self.widget_login(ctx);
                     }
