@@ -90,6 +90,9 @@ impl UploadHistoryDataUi {
 /* #endregion */
 
 struct MyApp {
+    upload_path: String,
+    uplaod_res_msg: String,
+
     logout_model_open: bool,
 
     delete_image_model_open: bool,
@@ -135,7 +138,7 @@ impl MyApp {
                 String::from("Profile"),
             ],
             tab_index: 0,
-            username: "ajanuw1995@gmail.com".to_string(),
+            username: "".to_string(),
             password: "".to_string(),
             login_err_o_s: None,
             login_loading: false,
@@ -147,6 +150,8 @@ impl MyApp {
                 .unwrap(),
             delete_image_model_open: false,
             delete_img_hash: None,
+            upload_path: "".to_string(),
+            uplaod_res_msg: "".to_string(),
         };
 
         if let Some(cache_data) = cache_data {
@@ -169,14 +174,42 @@ impl MyApp {
 
 /* #region MyApp methods */
 impl MyApp {
+    fn upload(&mut self) {
+        self.uplaod_res_msg.clear();
+
+        if self.upload_path.is_empty() {
+            self.uplaod_res_msg = "请填写上传本地文件路径".to_string();
+            return;
+        }
+
+        if !std::path::Path::new(&self.upload_path).exists() {
+            self.uplaod_res_msg = "文件不存在".to_string();
+            return;
+        }
+
+        self.uplaod_res_msg = "上传中...".to_string();
+
+        let res = self
+            .rt
+            .block_on(async { api::upload(&self.token, &self.upload_path).await });
+
+        match res {
+            Ok(_) => {
+                self.uplaod_res_msg = "上传成功".to_string();
+                self.upload_history_o_p = None;
+            }
+            Err(err) => self.uplaod_res_msg = err.to_string(),
+        };
+    }
+
     fn get_profile_data(&mut self, ctx: &egui::Context) {
-        // self.profile_o_p = None;
-        let token = self.token.clone();
         self.profile_o_p.get_or_insert_with(|| {
             let (sender, promise) = Promise::new();
+            let token = self.token.clone();
             let ctx = ctx.clone();
+
             self.rt.spawn(async move {
-                let res_result = api::profile(token).await;
+                let res_result = api::profile(&token).await;
                 sender.send(res_result);
                 ctx.request_repaint();
             });
@@ -185,15 +218,12 @@ impl MyApp {
     }
 
     fn get_upload_history_data(&mut self, ctx: &egui::Context) {
-        // self.upload_history_o_p = None;
-
-        let token = self.token.clone();
-
         self.upload_history_o_p.get_or_insert_with(|| {
             let (sender, promise) = Promise::new();
             let ctx = ctx.clone();
+            let token = self.token.clone();
             self.rt.spawn(async move {
-                let res_result = api::upload_history(token, 0).await;
+                let res_result = api::upload_history(&token).await;
 
                 // Vec<api::UploadHistoryData> to Vec<api::UploadHistoryDataUi>
                 let res_result_ui = res_result.and_then(|o: Vec<api::UploadHistoryData>| {
@@ -227,8 +257,35 @@ impl MyApp {
 impl MyApp {
     /// 登录界面
     fn widget_login(&mut self, ctx: &egui::Context) {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.vertical(|ui| {
+        // let my_frame = egui::containers::Frame {
+        //     inner_margin: egui::style::Margin {
+        //         left: 10.,
+        //         right: 10.,
+        //         top: 10.,
+        //         bottom: 10.,
+        //     },
+        //     outer_margin: egui::style::Margin {
+        //         left: 10.,
+        //         right: 10.,
+        //         top: 10.,
+        //         bottom: 10.,
+        //     },
+        //     rounding: egui::Rounding {
+        //         nw: 1.0,
+        //         ne: 1.0,
+        //         sw: 1.0,
+        //         se: 1.0,
+        //     },
+        //     shadow: eframe::epaint::Shadow {
+        //         extrusion: 1.0,
+        //         color: Color32::YELLOW,
+        //     },
+        //     fill: Color32::LIGHT_BLUE,
+        //     stroke: egui::Stroke::new(2.0, Color32::GOLD),
+        // };
+        egui::CentralPanel::default()
+            // .frame(my_frame)
+            .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("用户名: ").size(20.0));
                     ui.text_edit_singleline(&mut self.username);
@@ -247,11 +304,11 @@ impl MyApp {
                     {
                         self.token_o_p = None;
                         self.login_err_o_s = None;
-                        let (u, p) = (self.username.clone(), self.password.clone());
                         self.token_o_p.get_or_insert_with(|| {
+                            let (u, p) = (self.username.clone(), self.password.clone());
                             let (sender, promise) = Promise::new();
                             self.rt.spawn(async move {
-                                let res_result = api::token(u, p).await;
+                                let res_result = api::token(&u, &p).await;
                                 sender.send(res_result);
                             });
                             promise
@@ -269,7 +326,6 @@ impl MyApp {
                         .show(ui);
                 }
             });
-        });
     }
 
     fn widget_tags(&mut self, ui: &mut Ui, ctx: &egui::Context) {
@@ -294,8 +350,8 @@ impl MyApp {
                         .always_show_scroll(true)
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            ui.horizontal_wrapped(|ui| {
-                                egui::Grid::new("some_unique_id").show(ui, |ui| {
+                            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                                egui::Grid::new("images grid").show(ui, |ui| {
                                     for (i, data) in upload_history_v.iter().enumerate() {
                                         let item = (ctx.screen_rect().width() / K_IMAGE_MAX_WIDTH)
                                             .floor()
@@ -340,27 +396,6 @@ impl MyApp {
                                         }
                                     }
                                 });
-
-                                // for data in upload_history_v {
-                                // ui.with_layout(
-                                //     egui::Layout::top_down(egui::Align::TOP),
-                                //     |ui| {
-                                //         if let Some(Ok(image)) = data.image_p.ready() {
-                                //             image.show_max_size(
-                                //                 ui,
-                                //                 egui::Vec2::new(300.0, 300.0),
-                                //             );
-                                //         } else {
-                                //             ui.spinner();
-                                //         }
-                                //         if ui.button("复制url").clicked() {
-                                //             ui.output_mut(|o| {
-                                //                 o.copied_text = data.data.url.clone()
-                                //             });
-                                //         }
-                                //     },
-                                // );
-                                // }
                             });
                         });
                 }
@@ -379,7 +414,7 @@ impl MyApp {
     }
 
     // 显示账号信息
-    fn widget_profile(&mut self, ui: &mut Ui, ctx: &egui::Context) {
+    fn widget_profile(&mut self, ui: &mut Ui, _ctx: &egui::Context) {
         if let Some(profile_p) = &self.profile_o_p {
             match profile_p.ready() {
                 Some(result) => match result {
@@ -439,7 +474,17 @@ impl MyApp {
                 match self.tab_index {
                     0 => self.widget_images_list(ui, ctx),
                     1 => {
-                        ui.label(&self.tab[self.tab_index]);
+                        ui.vertical(|ui| {
+                            ui.horizontal(|ui| {
+                                ui.label("文件路径：");
+                                ui.text_edit_singleline(&mut self.upload_path);
+                                if ui.button("上传").clicked() {
+                                    self.upload();
+                                }
+                            });
+
+                            ui.label(RichText::new(&self.uplaod_res_msg).color(Color32::RED));
+                        });
                     }
                     2 => self.widget_profile(ui, ctx),
                     _ => {
@@ -458,8 +503,7 @@ impl eframe::App for MyApp {
         if self.logout_model_open {
             egui::Window::new("Modal Window")
                 .default_open(true)
-                .default_width(120f32)
-                .default_height(80f32)
+                .default_size([300f32, 200f32])
                 .show(ctx, |ui| {
                     ui.vertical(|ui| {
                         ui.label("确定退出登陆吗?");
@@ -471,7 +515,8 @@ impl eframe::App for MyApp {
                             {
                                 self.token.clear();
                                 self.token_o_p = None;
-                                cache::SmMsCacheData::save(cache::SmMsCacheData { token: None });
+                                cache::SmMsCacheData::save(cache::SmMsCacheData { token: None })
+                                    .unwrap();
                                 self.logout_model_open = false;
                             }
 
@@ -497,19 +542,18 @@ impl eframe::App for MyApp {
                                 .button(RichText::new("确定").color(Color32::BLUE))
                                 .clicked()
                             {
-                                self.delete_image_model_open = false;
-                                let mut upload_history_o_p = self.upload_history_o_p.as_mut();
-                                let token = self.token.clone();
                                 let hash = self.delete_img_hash.clone().unwrap();
-                                self.rt.spawn(async move {
-                                    let res = api::delete_image(token, hash).await;
-                                    if let Ok(r) = res {
-                                        if r {
-                                            upload_history_o_p = None;
-                                            self.get_upload_history_data(&ctx);
-                                        }
-                                    }
+
+                                let res = self.rt.block_on(async {
+                                    api::delete_image(&self.token, &hash).await
                                 });
+
+                                if res.is_ok() {
+                                    self.upload_history_o_p = None;
+                                    self.get_upload_history_data(&ctx);
+                                }
+
+                                self.delete_image_model_open = false;
                             }
 
                             if ui.button(RichText::new("取消")).clicked() {
