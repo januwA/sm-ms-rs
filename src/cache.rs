@@ -25,7 +25,7 @@ impl SmMsCacheData {
     }
 
     pub fn from() -> anyhow::Result<Self> {
-      let cache_path = std::path::Path::new(K_CACHE_PATH);
+        let cache_path = std::path::Path::new(K_CACHE_PATH);
         Ok(serde_json::from_slice::<SmMsCacheData>(
             std::fs::read(cache_path)?.as_ref(),
         )?)

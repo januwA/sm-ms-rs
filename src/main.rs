@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use eframe::egui::output::OpenUrl;
-use eframe::egui::Ui;
+use eframe::egui::{Hyperlink, Ui};
 use eframe::{
     egui::{self, RichText},
     epaint::Color32,
@@ -12,15 +12,14 @@ use tokio::runtime::Runtime;
 mod api;
 mod cache;
 mod util;
+mod widget;
 
 const K_IMAGE_MAX_WIDTH: f32 = 200.0;
 
 fn main() -> Result<(), eframe::Error> {
     env_logger::init();
-
-    let cache_data = cache::SmMsCacheData::get_or_create();
-
     let mut options = eframe::NativeOptions::default();
+    options.icon_data = Some(util::load_app_icon());
 
     // options.initial_window_pos = Some([0f32, 0f32].into());
     options.min_window_size = Some([600f32, 400f32].into());
@@ -28,44 +27,8 @@ fn main() -> Result<(), eframe::Error> {
     eframe::run_native(
         "sm ms",
         options,
-        Box::new(|cc| Box::new(MyApp::new(cc, cache_data))),
+        Box::new(|cc| Box::new(SmMsApp::new(cc, cache::SmMsCacheData::get_or_create()))),
     )
-}
-
-fn setup_custom_fonts(ctx: &egui::Context) {
-    // 从默认字体开始（我们将添加而不是替换它们）
-    let mut fonts = egui::FontDefinitions::default();
-
-    // 加载系统字体
-    let font = std::fs::read("c:/Windows/Fonts/msyh.ttc").unwrap();
-    fonts
-        .font_data
-        .insert("my_font".to_owned(), egui::FontData::from_owned(font));
-
-    // 安装我的字体
-    // fonts.font_data.insert(
-    //     "my_font".to_owned(),
-    //     egui::FontData::from_owned(include_bytes!(
-    //         "../font/YeZiGongChangChuanQiuShaXingKai-2.ttf"
-    //     )),
-    // );
-
-    // 对于比例文本，将我的字体放在第一位（最高优先级）
-    fonts
-        .families
-        .entry(egui::FontFamily::Proportional)
-        .or_default()
-        .insert(0, "my_font".to_owned());
-
-    // Put my font as last fallback for monospace:
-    fonts
-        .families
-        .entry(egui::FontFamily::Monospace)
-        .or_default()
-        .push("my_font".to_owned());
-
-    // 告诉 egui 使用这些字体
-    ctx.set_fonts(fonts);
 }
 
 /* #region UploadHistoryDataUi */
@@ -77,9 +40,12 @@ struct UploadHistoryDataUi {
 impl UploadHistoryDataUi {
     fn from_data(data: api::UploadHistoryData, ctx: egui::Context) -> Self {
         let (sender, image_p) = Promise::new();
+        tokio::spawn(async {
+            todo!();
+        });
         let request = ehttp::Request::get(&data.url);
         ehttp::fetch(request, move |response| {
-            let image = response.and_then(parse_ehttp_response);
+            let image = response.and_then(util::parse_ehttp_response);
             sender.send(image);
             ctx.request_repaint();
         });
@@ -89,11 +55,9 @@ impl UploadHistoryDataUi {
 }
 /* #endregion */
 
-struct MyApp {
+struct SmMsApp {
     upload_path: String,
     uplaod_res_msg: String,
-
-    logout_model_open: bool,
 
     delete_image_model_open: bool,
     delete_img_hash: Option<String>,
@@ -123,37 +87,40 @@ struct MyApp {
     rt: Runtime,
 }
 
-/* #region MyApp constructor */
-impl MyApp {
-    fn new(cc: &eframe::CreationContext<'_>, cache_data: Option<cache::SmMsCacheData>) -> Self {
-        setup_custom_fonts(&cc.egui_ctx);
-
-        let mut my = Self {
-            logout_model_open: false,
-            upload_history_o_p: None,
-            profile_o_p: None,
-            tab: vec![
+impl Default for SmMsApp {
+    fn default() -> Self {
+        Self {
+            upload_path: Default::default(),
+            uplaod_res_msg: Default::default(),
+            delete_image_model_open: Default::default(),
+            delete_img_hash: Default::default(),
+            username: Default::default(),
+            password: Default::default(),
+            login_loading: Default::default(),
+            login_err_o_s: Default::default(),
+            token: Default::default(),
+            token_o_p: Default::default(),
+            tab:vec![
                 String::from("Upload History"),
                 String::from("Now Upload"),
                 String::from("Profile"),
             ],
-            tab_index: 0,
-            username: "".to_string(),
-            password: "".to_string(),
-            login_err_o_s: None,
-            login_loading: false,
-            token: "".to_string(),
-            token_o_p: None,
+            tab_index: Default::default(),
+            profile_o_p: Default::default(),
+            upload_history_o_p: Default::default(),
             rt: tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
                 .unwrap(),
-            delete_image_model_open: false,
-            delete_img_hash: None,
-            upload_path: "".to_string(),
-            uplaod_res_msg: "".to_string(),
-        };
+        }
+    }
+}
 
+/* #region MyApp constructor */
+impl SmMsApp {
+    fn new(cc: &eframe::CreationContext<'_>, cache_data: Option<cache::SmMsCacheData>) -> Self {
+        util::setup_custom_fonts(&cc.egui_ctx);
+        let mut my = Self::default();
         if let Some(cache_data) = cache_data {
             // 从缓存中初始化token
             if let Some(token) = cache_data.token {
@@ -173,7 +140,7 @@ impl MyApp {
 /* #endregion */
 
 /* #region MyApp methods */
-impl MyApp {
+impl SmMsApp {
     fn upload(&mut self) {
         self.uplaod_res_msg.clear();
 
@@ -253,54 +220,59 @@ impl MyApp {
 }
 /* #endregion */
 
-/* #region MyApp widgets */
-impl MyApp {
+/* #region MyApp panel */
+impl SmMsApp {
     /// 登录界面
-    fn widget_login(&mut self, ctx: &egui::Context) {
-        // let my_frame = egui::containers::Frame {
-        //     inner_margin: egui::style::Margin {
-        //         left: 10.,
-        //         right: 10.,
-        //         top: 10.,
-        //         bottom: 10.,
-        //     },
-        //     outer_margin: egui::style::Margin {
-        //         left: 10.,
-        //         right: 10.,
-        //         top: 10.,
-        //         bottom: 10.,
-        //     },
-        //     rounding: egui::Rounding {
-        //         nw: 1.0,
-        //         ne: 1.0,
-        //         sw: 1.0,
-        //         se: 1.0,
-        //     },
-        //     shadow: eframe::epaint::Shadow {
-        //         extrusion: 1.0,
-        //         color: Color32::YELLOW,
-        //     },
-        //     fill: Color32::LIGHT_BLUE,
-        //     stroke: egui::Stroke::new(2.0, Color32::GOLD),
-        // };
+    fn login_panel(&mut self, ctx: &egui::Context) {
+        let _my_frame = egui::containers::Frame {
+            inner_margin: egui::style::Margin {
+                left: 10.,
+                right: 10.,
+                top: 10.,
+                bottom: 10.,
+            },
+            outer_margin: egui::style::Margin {
+                left: 10.,
+                right: 10.,
+                top: 10.,
+                bottom: 10.,
+            },
+            rounding: egui::Rounding {
+                nw: 1.0,
+                ne: 1.0,
+                sw: 1.0,
+                se: 1.0,
+            },
+            shadow: eframe::epaint::Shadow {
+                extrusion: 1.0,
+                color: Color32::YELLOW,
+            },
+            fill: Color32::LIGHT_BLUE,
+            stroke: egui::Stroke::new(2.0, Color32::GOLD),
+        };
+
         egui::CentralPanel::default()
             // .frame(my_frame)
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("用户名: ").size(20.0));
-                    ui.text_edit_singleline(&mut self.username);
-                });
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("密码: ").size(20.0));
-                    ui.add(egui::TextEdit::singleline(&mut self.password).password(true));
-                });
+                egui::Grid::new("login")
+                    .num_columns(2)
+                    .striped(false)
+                    .show(ui, |ui| {
+                        ui.label("用户名:");
+                        ui.add(egui::TextEdit::singleline(&mut self.username));
+                        ui.end_row();
+
+                        ui.label("密码:");
+                        ui.add(egui::TextEdit::singleline(&mut self.password).password(true));
+                        ui.end_row();
+                    });
+
                 ui.horizontal(|ui| {
                     if ui
-                        .add_enabled(
-                            !self.login_loading,
-                            egui::Button::new(RichText::new("登录").size(20.0)),
-                        )
+                        .add_enabled(!self.login_loading, egui::Button::new("登录"))
                         .clicked()
+                        && !self.username.is_empty()
+                        && !self.password.is_empty()
                     {
                         self.token_o_p = None;
                         self.login_err_o_s = None;
@@ -320,6 +292,11 @@ impl MyApp {
                     }
                 });
 
+                ui.add(Hyperlink::from_label_and_url(
+                    "Register",
+                    "https://sm.ms/register",
+                ));
+
                 if let Some(login_err) = self.login_err_o_s.as_mut() {
                     egui::TextEdit::multiline(login_err)
                         .text_color(Color32::RED)
@@ -328,7 +305,7 @@ impl MyApp {
             });
     }
 
-    fn widget_tags(&mut self, ui: &mut Ui, ctx: &egui::Context) {
+    fn tabs_panel(&mut self, ui: &mut Ui, ctx: &egui::Context) {
         ui.horizontal(|ui| {
             self.tab.clone().iter().enumerate().for_each(|(i, label)| {
                 if ui.selectable_label(self.tab_index == i, label).clicked() {
@@ -339,7 +316,7 @@ impl MyApp {
     }
 
     // 显示上传的历史图片
-    fn widget_images_list(&mut self, ui: &mut Ui, ctx: &egui::Context) {
+    fn images_grid_panel(&mut self, ui: &mut Ui, ctx: &egui::Context) {
         let Some(upload_history_p) = &self.upload_history_o_p else {
             return;
          };
@@ -361,37 +338,53 @@ impl MyApp {
                                             ui.end_row();
                                         } else {
                                             ui.vertical(|ui| {
-                                                if let Some(Ok(image)) = data.image_p.ready() {
-                                                    image.show_max_size(
-                                                        ui,
-                                                        [K_IMAGE_MAX_WIDTH, K_IMAGE_MAX_WIDTH]
-                                                            .into(),
-                                                    );
-                                                } else {
-                                                    ui.spinner();
-                                                }
+                                                ui.with_layout(
+                                                    egui::Layout::top_down(egui::Align::Center),
+                                                    |ui| {
+                                                        if let Some(Ok(image)) =
+                                                            data.image_p.ready()
+                                                        {
+                                                            image.show_max_size(
+                                                                ui,
+                                                                [
+                                                                    K_IMAGE_MAX_WIDTH,
+                                                                    K_IMAGE_MAX_WIDTH,
+                                                                ]
+                                                                .into(),
+                                                            );
+                                                        } else {
+                                                            ui.spinner();
+                                                        }
+                                                    },
+                                                );
 
-                                                ui.horizontal(|ui| {
-                                                    if ui.button("复制 url").clicked() {
-                                                        ui.output_mut(|o| {
-                                                            o.copied_text = data.data.url.clone()
-                                                        });
-                                                    }
-                                                    if ui.button("打开 url").clicked() {
-                                                        ui.output_mut(|o| {
-                                                            o.open_url = Some(OpenUrl {
-                                                                url: data.data.url.clone(),
-                                                                new_tab: true,
-                                                            });
-                                                        });
-                                                    }
+                                                ui.with_layout(
+                                                    egui::Layout::bottom_up(egui::Align::LEFT),
+                                                    |ui| {
+                                                        ui.horizontal(|ui| {
+                                                            if ui.button("复制 url").clicked() {
+                                                                ui.output_mut(|o| {
+                                                                    o.copied_text =
+                                                                        data.data.url.clone()
+                                                                });
+                                                            }
+                                                            if ui.button("打开 url").clicked() {
+                                                                ui.output_mut(|o| {
+                                                                    o.open_url = Some(OpenUrl {
+                                                                        url: data.data.url.clone(),
+                                                                        new_tab: true,
+                                                                    });
+                                                                });
+                                                            }
 
-                                                    if ui.button("删除").clicked() {
-                                                        self.delete_img_hash =
-                                                            Some(data.data.hash.clone());
-                                                        self.delete_image_model_open = true;
-                                                    }
-                                                });
+                                                            if ui.button("删除").clicked() {
+                                                                self.delete_img_hash =
+                                                                    Some(data.data.hash.clone());
+                                                                self.delete_image_model_open = true;
+                                                            }
+                                                        });
+                                                    },
+                                                );
                                             });
                                         }
                                     }
@@ -414,32 +407,17 @@ impl MyApp {
     }
 
     // 显示账号信息
-    fn widget_profile(&mut self, ui: &mut Ui, _ctx: &egui::Context) {
+    fn profile_panel(&mut self, ui: &mut Ui, _ctx: &egui::Context) {
         if let Some(profile_p) = &self.profile_o_p {
             match profile_p.ready() {
                 Some(result) => match result {
                     Ok(profile_data) => {
                         ui.vertical(|ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new("username: ").size(20.0));
-                                ui.label(RichText::new(&profile_data.username).size(20.0));
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new("email: ").size(20.0));
-                                ui.label(RichText::new(&profile_data.email).size(20.0));
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new("role: ").size(20.0));
-                                ui.label(RichText::new(&profile_data.role).size(20.0));
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new("disk_usage: ").size(20.0));
-                                ui.label(RichText::new(&profile_data.disk_usage).size(20.0));
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new("disk_limit: ").size(20.0));
-                                ui.label(RichText::new(&profile_data.disk_limit).size(20.0));
-                            });
+                            widget::info_row(ui, "username: ", &profile_data.username);
+                            widget::info_row(ui, "email: ", &profile_data.email);
+                            widget::info_row(ui, "role: ", &profile_data.role);
+                            widget::info_row(ui, "disk_usage: ", &profile_data.disk_usage);
+                            widget::info_row(ui, "disk_limit: ", &profile_data.disk_limit);
                         });
                     }
                     Err(err) => {
@@ -456,23 +434,24 @@ impl MyApp {
             }
         };
 
-        if ui
-            .button(RichText::new("退出登录").color(Color32::GREEN))
-            .clicked()
-        {
-            self.logout_model_open = true;
+        ui.separator();
+
+        if widget::error_button(ui, "退出登录").clicked() {
+            self.token.clear();
+            self.token_o_p = None;
+            cache::SmMsCacheData::save(cache::SmMsCacheData { token: None }).unwrap();
         };
     }
 
     /// 登录后界面
-    fn widget_dashboard(&mut self, ctx: &egui::Context) {
+    fn dashboard_panel(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.vertical(|ui| {
-                // tabs
-                self.widget_tags(ui, ctx);
+                self.tabs_panel(ui, ctx);
+                ui.separator();
 
                 match self.tab_index {
-                    0 => self.widget_images_list(ui, ctx),
+                    0 => self.images_grid_panel(ui, ctx),
                     1 => {
                         ui.vertical(|ui| {
                             ui.horizontal(|ui| {
@@ -486,7 +465,7 @@ impl MyApp {
                             ui.label(RichText::new(&self.uplaod_res_msg).color(Color32::RED));
                         });
                     }
-                    2 => self.widget_profile(ui, ctx),
+                    2 => self.profile_panel(ui, ctx),
                     _ => {
                         ui.label("??");
                     }
@@ -494,39 +473,25 @@ impl MyApp {
             });
         });
     }
+
+    fn menu_panel(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        // 顶部菜单栏
+        egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
+            egui::menu::bar(ui, |ui| {
+                ui.menu_button("File", |ui| {
+                    if ui.button("Quit").clicked() {
+                        frame.close();
+                    }
+                });
+            });
+        });
+    }
 }
 /* #endregion */
 
-/* #region MyApp update */
-impl eframe::App for MyApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if self.logout_model_open {
-            egui::Window::new("Modal Window")
-                .default_open(true)
-                .default_size([300f32, 200f32])
-                .show(ctx, |ui| {
-                    ui.vertical(|ui| {
-                        ui.label("确定退出登陆吗?");
-
-                        ui.horizontal(|ui| {
-                            if ui
-                                .button(RichText::new("确定").color(Color32::BLUE))
-                                .clicked()
-                            {
-                                self.token.clear();
-                                self.token_o_p = None;
-                                cache::SmMsCacheData::save(cache::SmMsCacheData { token: None })
-                                    .unwrap();
-                                self.logout_model_open = false;
-                            }
-
-                            if ui.button(RichText::new("取消")).clicked() {
-                                self.logout_model_open = false;
-                            }
-                        });
-                    });
-                });
-        }
+impl eframe::App for SmMsApp {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.menu_panel(ctx, frame);
 
         if self.delete_image_model_open {
             egui::Window::new("Modal Window")
@@ -538,25 +503,19 @@ impl eframe::App for MyApp {
                         ui.label("确定删除吗?");
 
                         ui.horizontal(|ui| {
-                            if ui
-                                .button(RichText::new("确定").color(Color32::BLUE))
-                                .clicked()
-                            {
+                            if widget::error_button(ui, "确定").clicked() {
                                 let hash = self.delete_img_hash.clone().unwrap();
-
                                 let res = self.rt.block_on(async {
                                     api::delete_image(&self.token, &hash).await
                                 });
-
                                 if res.is_ok() {
                                     self.upload_history_o_p = None;
                                     self.get_upload_history_data(&ctx);
                                 }
-
                                 self.delete_image_model_open = false;
                             }
 
-                            if ui.button(RichText::new("取消")).clicked() {
+                            if ui.button("取消").clicked() {
                                 self.delete_image_model_open = false;
                             }
                         });
@@ -565,7 +524,7 @@ impl eframe::App for MyApp {
         }
 
         if self.token_o_p.is_none() {
-            self.widget_login(ctx);
+            self.login_panel(ctx);
         } else {
             match self.token_o_p.as_mut().unwrap().ready() {
                 Some(result) => match result {
@@ -580,35 +539,20 @@ impl eframe::App for MyApp {
 
                         // 加载一下数据
                         self.tab_item_click(self.tab_index, ctx);
-                        self.widget_dashboard(ctx);
+                        self.dashboard_panel(ctx);
                     }
                     Err(err) => {
                         self.login_loading = false;
                         self.login_err_o_s = Some(err.to_string());
                         self.token_o_p = None;
-                        self.widget_login(ctx);
+                        self.login_panel(ctx);
                     }
                 },
                 _ => {
                     self.login_loading = true;
-                    self.widget_login(ctx);
+                    self.login_panel(ctx);
                 }
             }
         }
-    }
-}
-
-/* #endregion */
-
-#[allow(clippy::needless_pass_by_value)]
-fn parse_ehttp_response(response: ehttp::Response) -> Result<RetainedImage, String> {
-    let content_type = response.content_type().unwrap_or_default();
-    if content_type.starts_with("image/") {
-        RetainedImage::from_image_bytes(&response.url, &response.bytes)
-    } else {
-        Err(format!(
-            "Expected image, found content-type {:?}",
-            content_type
-        ))
     }
 }
