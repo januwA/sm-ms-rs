@@ -15,6 +15,7 @@ mod util;
 mod widget;
 
 const K_IMAGE_MAX_WIDTH: f32 = 200.0;
+const K_TABS: [&str; 3] = ["Upload History", "Now Upload", "Profile"];
 
 fn main() -> Result<(), eframe::Error> {
     env_logger::init();
@@ -34,15 +35,12 @@ fn main() -> Result<(), eframe::Error> {
 /* #region UploadHistoryDataUi */
 struct UploadHistoryDataUi {
     data: api::UploadHistoryData,
-    image_p: Promise<Result<RetainedImage, String>>,
+    image_promise: Promise<Result<RetainedImage, String>>,
 }
 
 impl UploadHistoryDataUi {
     fn from_data(data: api::UploadHistoryData, ctx: egui::Context) -> Self {
-        let (sender, image_p) = Promise::new();
-        tokio::spawn(async {
-            todo!();
-        });
+        let (sender, promise) = Promise::new();
         let request = ehttp::Request::get(&data.url);
         ehttp::fetch(request, move |response| {
             let image = response.and_then(util::parse_ehttp_response);
@@ -50,7 +48,7 @@ impl UploadHistoryDataUi {
             ctx.request_repaint();
         });
 
-        UploadHistoryDataUi { data, image_p }
+        UploadHistoryDataUi { data, image_promise: promise }
     }
 }
 /* #endregion */
@@ -66,23 +64,18 @@ struct SmMsApp {
     username: String,
     password: String,
     login_loading: bool,
-    login_err_o_s: Option<String>,
+    login_err: Option<String>,
     token: String,
-    token_o_p: Option<Promise<anyhow::Result<String>>>,
+    token_promise: Option<Promise<anyhow::Result<String>>>,
     /* #endregion */
-
-
-    /* #region tab */
-    tab: Vec<String>,
     tab_index: usize,
-    /* #endregion */
 
     /* #region profile */
-    profile_o_p: Option<Promise<anyhow::Result<api::ProfileData>>>,
+    profile_promise: Option<Promise<anyhow::Result<api::ProfileData>>>,
     /* #endregion */
 
     /* #region upload history */
-    upload_history_o_p: Option<Promise<anyhow::Result<Vec<UploadHistoryDataUi>>>>,
+    upload_history_promise: Option<Promise<anyhow::Result<Vec<UploadHistoryDataUi>>>>,
     /* #endregion */
     rt: Runtime,
 }
@@ -97,17 +90,12 @@ impl Default for SmMsApp {
             username: Default::default(),
             password: Default::default(),
             login_loading: Default::default(),
-            login_err_o_s: Default::default(),
+            login_err: Default::default(),
             token: Default::default(),
-            token_o_p: Default::default(),
-            tab:vec![
-                String::from("Upload History"),
-                String::from("Now Upload"),
-                String::from("Profile"),
-            ],
+            token_promise: Default::default(),
             tab_index: Default::default(),
-            profile_o_p: Default::default(),
-            upload_history_o_p: Default::default(),
+            profile_promise: Default::default(),
+            upload_history_promise: Default::default(),
             rt: tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
@@ -121,21 +109,19 @@ impl SmMsApp {
     fn new(cc: &eframe::CreationContext<'_>, cache_data: Option<cache::SmMsCacheData>) -> Self {
         util::setup_custom_fonts(&cc.egui_ctx);
         let mut my = Self::default();
+        
         if let Some(cache_data) = cache_data {
             // 从缓存中初始化token
             if let Some(token) = cache_data.token {
                 my.token = token.clone();
                 let (s, p) = Promise::new();
-                my.token_o_p = Some(p);
+                my.token_promise = Some(p);
                 s.send(Ok(token.clone()));
             }
         }
 
-        my.init();
         my
     }
-
-    fn init(&mut self) {}
 }
 /* #endregion */
 
@@ -163,14 +149,14 @@ impl SmMsApp {
         match res {
             Ok(_) => {
                 self.uplaod_res_msg = "上传成功".to_string();
-                self.upload_history_o_p = None;
+                self.upload_history_promise = None;
             }
             Err(err) => self.uplaod_res_msg = err.to_string(),
         };
     }
 
     fn get_profile_data(&mut self, ctx: &egui::Context) {
-        self.profile_o_p.get_or_insert_with(|| {
+        self.profile_promise.get_or_insert_with(|| {
             let (sender, promise) = Promise::new();
             let token = self.token.clone();
             let ctx = ctx.clone();
@@ -185,7 +171,7 @@ impl SmMsApp {
     }
 
     fn get_upload_history_data(&mut self, ctx: &egui::Context) {
-        self.upload_history_o_p.get_or_insert_with(|| {
+        self.upload_history_promise.get_or_insert_with(|| {
             let (sender, promise) = Promise::new();
             let ctx = ctx.clone();
             let token = self.token.clone();
@@ -205,17 +191,6 @@ impl SmMsApp {
             });
             promise
         });
-    }
-
-    fn tab_item_click(&mut self, idx: usize, ctx: &egui::Context) {
-        self.tab_index = idx;
-        match self.tab_index {
-            0 => self.get_upload_history_data(ctx),
-            1 => {}
-            2 => self.get_profile_data(ctx),
-
-            _ => todo!(),
-        }
     }
 }
 /* #endregion */
@@ -274,9 +249,9 @@ impl SmMsApp {
                         && !self.username.is_empty()
                         && !self.password.is_empty()
                     {
-                        self.token_o_p = None;
-                        self.login_err_o_s = None;
-                        self.token_o_p.get_or_insert_with(|| {
+                        self.token_promise = None;
+                        self.login_err = None;
+                        self.token_promise.get_or_insert_with(|| {
                             let (u, p) = (self.username.clone(), self.password.clone());
                             let (sender, promise) = Promise::new();
                             self.rt.spawn(async move {
@@ -297,7 +272,7 @@ impl SmMsApp {
                     "https://sm.ms/register",
                 ));
 
-                if let Some(login_err) = self.login_err_o_s.as_mut() {
+                if let Some(login_err) = self.login_err.as_mut() {
                     egui::TextEdit::multiline(login_err)
                         .text_color(Color32::RED)
                         .show(ui);
@@ -307,17 +282,25 @@ impl SmMsApp {
 
     fn tabs_panel(&mut self, ui: &mut Ui, ctx: &egui::Context) {
         ui.horizontal(|ui| {
-            self.tab.clone().iter().enumerate().for_each(|(i, label)| {
-                if ui.selectable_label(self.tab_index == i, label).clicked() {
-                    self.tab_item_click(i, ctx);
+            for (i, label) in K_TABS.iter().enumerate() {
+                if ui
+                    .selectable_label(self.tab_index == i, label.to_string())
+                    .clicked()
+                {
+                    self.tab_index = i;
+                    match i {
+                        0 => self.get_upload_history_data(ctx),
+                        2 => self.get_profile_data(ctx),
+                        _ => {}
+                    }
                 }
-            });
+            }
         });
     }
 
     // 显示上传的历史图片
     fn images_grid_panel(&mut self, ui: &mut Ui, ctx: &egui::Context) {
-        let Some(upload_history_p) = &self.upload_history_o_p else {
+        let Some(upload_history_p) = &self.upload_history_promise else {
             return;
          };
         match upload_history_p.ready() {
@@ -342,7 +325,7 @@ impl SmMsApp {
                                                     egui::Layout::top_down(egui::Align::Center),
                                                     |ui| {
                                                         if let Some(Ok(image)) =
-                                                            data.image_p.ready()
+                                                            data.image_promise.ready()
                                                         {
                                                             image.show_max_size(
                                                                 ui,
@@ -408,7 +391,7 @@ impl SmMsApp {
 
     // 显示账号信息
     fn profile_panel(&mut self, ui: &mut Ui, _ctx: &egui::Context) {
-        if let Some(profile_p) = &self.profile_o_p {
+        if let Some(profile_p) = &self.profile_promise {
             match profile_p.ready() {
                 Some(result) => match result {
                     Ok(profile_data) => {
@@ -438,7 +421,7 @@ impl SmMsApp {
 
         if widget::error_button(ui, "退出登录").clicked() {
             self.token.clear();
-            self.token_o_p = None;
+            self.token_promise = None;
             cache::SmMsCacheData::save(cache::SmMsCacheData { token: None }).unwrap();
         };
     }
@@ -509,7 +492,7 @@ impl eframe::App for SmMsApp {
                                     api::delete_image(&self.token, &hash).await
                                 });
                                 if res.is_ok() {
-                                    self.upload_history_o_p = None;
+                                    self.upload_history_promise = None;
                                     self.get_upload_history_data(&ctx);
                                 }
                                 self.delete_image_model_open = false;
@@ -523,10 +506,8 @@ impl eframe::App for SmMsApp {
                 });
         }
 
-        if self.token_o_p.is_none() {
-            self.login_panel(ctx);
-        } else {
-            match self.token_o_p.as_mut().unwrap().ready() {
+        if let Some(token_promise) = &self.token_promise {
+            match token_promise.ready() {
                 Some(result) => match result {
                     Ok(token) => {
                         self.login_loading = false;
@@ -537,14 +518,13 @@ impl eframe::App for SmMsApp {
                         })
                         .unwrap();
 
-                        // 加载一下数据
-                        self.tab_item_click(self.tab_index, ctx);
+                        self.get_upload_history_data(ctx);
                         self.dashboard_panel(ctx);
                     }
                     Err(err) => {
                         self.login_loading = false;
-                        self.login_err_o_s = Some(err.to_string());
-                        self.token_o_p = None;
+                        self.login_err = Some(err.to_string());
+                        self.token_promise = None;
                         self.login_panel(ctx);
                     }
                 },
@@ -553,6 +533,8 @@ impl eframe::App for SmMsApp {
                     self.login_panel(ctx);
                 }
             }
+        } else {
+            self.login_panel(ctx);
         }
     }
 }
