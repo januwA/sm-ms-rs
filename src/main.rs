@@ -14,7 +14,7 @@ mod cache;
 mod util;
 mod widget;
 
-const K_IMAGE_MAX_WIDTH: f32 = 200.0;
+const K_IMAGE_MAX_WIDTH: f32 = 320.0;
 const K_TABS: [&str; 3] = ["Upload History", "Now Upload", "Profile"];
 
 fn main() -> Result<(), eframe::Error> {
@@ -48,12 +48,16 @@ impl UploadHistoryDataUi {
             ctx.request_repaint();
         });
 
-        UploadHistoryDataUi { data, image_promise: promise }
+        UploadHistoryDataUi {
+            data,
+            image_promise: promise,
+        }
     }
 }
 /* #endregion */
 
 struct SmMsApp {
+    action_status: String,
     upload_path: String,
     uplaod_res_msg: String,
 
@@ -100,6 +104,7 @@ impl Default for SmMsApp {
                 .enable_all()
                 .build()
                 .unwrap(),
+            action_status: Default::default(),
         }
     }
 }
@@ -109,7 +114,7 @@ impl SmMsApp {
     fn new(cc: &eframe::CreationContext<'_>, cache_data: Option<cache::SmMsCacheData>) -> Self {
         util::setup_custom_fonts(&cc.egui_ctx);
         let mut my = Self::default();
-        
+
         if let Some(cache_data) = cache_data {
             // 从缓存中初始化token
             if let Some(token) = cache_data.token {
@@ -128,35 +133,38 @@ impl SmMsApp {
 /* #region MyApp methods */
 impl SmMsApp {
     fn upload(&mut self) {
+        dbg!("upload");
         self.uplaod_res_msg.clear();
 
         if self.upload_path.is_empty() {
-            self.uplaod_res_msg = "请填写上传本地文件路径".to_string();
+            self.uplaod_res_msg = "请填写上传本地文件路径".to_owned();
             return;
         }
 
         if !std::path::Path::new(&self.upload_path).exists() {
-            self.uplaod_res_msg = "文件不存在".to_string();
+            self.uplaod_res_msg = "文件不存在".to_owned();
             return;
         }
 
-        self.uplaod_res_msg = "上传中...".to_string();
+        self.uplaod_res_msg = "上传中...".to_owned();
 
         let res = self
             .rt
             .block_on(async { api::upload(&self.token, &self.upload_path).await });
 
         match res {
-            Ok(_) => {
-                self.uplaod_res_msg = "上传成功".to_string();
+            Err(err) => self.uplaod_res_msg = err.to_string(),
+            _ => {
+                self.uplaod_res_msg = "上传成功".to_owned();
                 self.upload_history_promise = None;
             }
-            Err(err) => self.uplaod_res_msg = err.to_string(),
         };
     }
 
     fn get_profile_data(&mut self, ctx: &egui::Context) {
         self.profile_promise.get_or_insert_with(|| {
+            dbg!("get_profile_data");
+
             let (sender, promise) = Promise::new();
             let token = self.token.clone();
             let ctx = ctx.clone();
@@ -172,6 +180,8 @@ impl SmMsApp {
 
     fn get_upload_history_data(&mut self, ctx: &egui::Context) {
         self.upload_history_promise.get_or_insert_with(|| {
+            dbg!("get_upload_history_data");
+
             let (sender, promise) = Promise::new();
             let ctx = ctx.clone();
             let token = self.token.clone();
@@ -243,19 +253,29 @@ impl SmMsApp {
                     });
 
                 ui.horizontal(|ui| {
+                    let disabel_btn =
+                        self.login_loading || self.username.is_empty() || self.password.is_empty();
+
                     if ui
-                        .add_enabled(!self.login_loading, egui::Button::new("登录"))
+                        .add_enabled(!disabel_btn, egui::Button::new("登录"))
                         .clicked()
-                        && !self.username.is_empty()
-                        && !self.password.is_empty()
                     {
                         self.token_promise = None;
                         self.login_err = None;
                         self.token_promise.get_or_insert_with(|| {
-                            let (u, p) = (self.username.clone(), self.password.clone());
+                            let (u, p) = (self.username.to_owned(), self.password.to_owned());
+
                             let (sender, promise) = Promise::new();
                             self.rt.spawn(async move {
                                 let res_result = api::token(&u, &p).await;
+
+                                if let Ok(res) = &res_result {
+                                    cache::SmMsCacheData::save(cache::SmMsCacheData {
+                                        token: Some(res.to_owned()),
+                                    })
+                                    .unwrap();
+                                }
+
                                 sender.send(res_result);
                             });
                             promise
@@ -303,90 +323,73 @@ impl SmMsApp {
         let Some(upload_history_p) = &self.upload_history_promise else {
             return;
          };
-        match upload_history_p.ready() {
-            Some(result) => match result {
-                Ok(upload_history_v) => {
-                    egui::ScrollArea::vertical()
-                        .always_show_scroll(true)
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                                egui::Grid::new("images grid").show(ui, |ui| {
-                                    for (i, data) in upload_history_v.iter().enumerate() {
-                                        let item = (ctx.screen_rect().width() / K_IMAGE_MAX_WIDTH)
-                                            .floor()
-                                            as usize;
 
-                                        if i % item == 0 {
-                                            ui.end_row();
-                                        } else {
-                                            ui.vertical(|ui| {
-                                                ui.with_layout(
-                                                    egui::Layout::top_down(egui::Align::Center),
-                                                    |ui| {
-                                                        if let Some(Ok(image)) =
-                                                            data.image_promise.ready()
-                                                        {
-                                                            image.show_max_size(
-                                                                ui,
-                                                                [
-                                                                    K_IMAGE_MAX_WIDTH,
-                                                                    K_IMAGE_MAX_WIDTH,
-                                                                ]
-                                                                .into(),
-                                                            );
-                                                        } else {
-                                                            ui.spinner();
-                                                        }
-                                                    },
-                                                );
+        let ready = upload_history_p.ready();
 
-                                                ui.with_layout(
-                                                    egui::Layout::bottom_up(egui::Align::LEFT),
-                                                    |ui| {
-                                                        ui.horizontal(|ui| {
-                                                            if ui.button("复制 url").clicked() {
-                                                                ui.output_mut(|o| {
-                                                                    o.copied_text =
-                                                                        data.data.url.clone()
-                                                                });
-                                                            }
-                                                            if ui.button("打开 url").clicked() {
-                                                                ui.output_mut(|o| {
-                                                                    o.open_url = Some(OpenUrl {
-                                                                        url: data.data.url.clone(),
-                                                                        new_tab: true,
-                                                                    });
-                                                                });
-                                                            }
+        // loading
+        let Some(result) = ready else {
+            ui.spinner();
+            return;
+         };
 
-                                                            if ui.button("删除").clicked() {
-                                                                self.delete_img_hash =
-                                                                    Some(data.data.hash.clone());
-                                                                self.delete_image_model_open = true;
-                                                            }
-                                                        });
-                                                    },
-                                                );
+        // error
+        if let Err(err) = result {
+            widget::error_label(ui, err.to_string());
+            return;
+        };
+
+        // show data
+        let Ok(upload_history_v) = result else { todo!() };
+
+        egui::ScrollArea::vertical()
+            .always_show_scroll(true)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                egui::Grid::new("images grid").show(ui, |ui| {
+                    for (i, data) in upload_history_v.iter().enumerate() {
+                        let item = (ctx.screen_rect().width() / K_IMAGE_MAX_WIDTH).floor() as usize;
+
+                        if i % item == 0 && i != 0{
+                            ui.end_row();
+                            continue;
+                        }
+
+                        ui.vertical(|ui| {
+                            if let Some(Ok(image)) = data.image_promise.ready() {
+                                let _w = image.width() as f32;
+                                let _h = image.height() as f32;
+                                let h = _h * (K_IMAGE_MAX_WIDTH / _w);
+                                image.show_size(ui, [K_IMAGE_MAX_WIDTH, h].into());
+                            } else {
+                                ui.spinner();
+                            }
+
+                            ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                                ui.horizontal(|ui| {
+                                    if ui.button("复制 url").clicked() {
+                                        ui.output_mut(|o| {
+                                            o.copied_text = data.data.url.clone()
+                                        });
+                                    }
+                                    if ui.button("打开 url").clicked() {
+                                        ui.output_mut(|o| {
+                                            o.open_url = Some(OpenUrl {
+                                                url: data.data.url.clone(),
+                                                new_tab: true,
                                             });
-                                        }
+                                        });
+                                    }
+
+                                    if ui.button("删除").clicked() {
+                                        self.delete_img_hash = Some(data.data.hash.clone());
+                                        self.delete_image_model_open = true;
                                     }
                                 });
                             });
                         });
-                }
-                Err(err) => {
-                    ui.label(
-                        RichText::new(&err.to_string())
-                            .size(20.0)
-                            .color(Color32::RED),
-                    );
-                }
-            },
-            _ => {
-                ui.spinner();
-            }
-        }
+                    }
+                });
+            });
     }
 
     // 显示账号信息
@@ -510,21 +513,22 @@ impl eframe::App for SmMsApp {
             match token_promise.ready() {
                 Some(result) => match result {
                     Ok(token) => {
-                        self.login_loading = false;
-                        self.token = token.clone();
-
-                        cache::SmMsCacheData::save(cache::SmMsCacheData {
-                            token: Some(token.clone()),
-                        })
-                        .unwrap();
+                        if self.login_loading {
+                            dbg!("token ok");
+                            self.login_loading = false;
+                            self.token = token.clone();
+                        }
 
                         self.get_upload_history_data(ctx);
                         self.dashboard_panel(ctx);
                     }
                     Err(err) => {
-                        self.login_loading = false;
-                        self.login_err = Some(err.to_string());
-                        self.token_promise = None;
+                        if self.login_loading {
+                            self.login_loading = false;
+                            self.login_err = Some(err.to_string());
+                            self.token_promise = None;
+                        }
+
                         self.login_panel(ctx);
                     }
                 },
@@ -536,5 +540,12 @@ impl eframe::App for SmMsApp {
         } else {
             self.login_panel(ctx);
         }
+
+        // egui::TopBottomPanel::bottom("bottom_panel").show(ctx, |ui| {
+        //     ui.horizontal(|ui| {
+        //         ui.label("Action Status: ");
+        //         ui.label(&self.action_status);
+        //     });
+        // });
     }
 }
